@@ -54,14 +54,18 @@ def surreal_query(sql: str) -> list:
         headers={
             "Accept": "application/json",
             "Content-Type": "text/plain",
-            "NS": SURREAL_NS,
-            "DB": SURREAL_DB,
+            "Surreal-NS": SURREAL_NS,
+            "Surreal-DB": SURREAL_DB,
         },
         auth=(SURREAL_USER, SURREAL_PASS),
         timeout=30.0,
     )
     resp.raise_for_status()
-    return resp.json()
+    results = resp.json()
+    for r in results:
+        if isinstance(r, dict) and r.get("status") == "ERR":
+            raise RuntimeError(f"SurrealDB error: {r.get('detail', r)}")
+    return results
 
 
 def setup_schema(dims: int) -> None:
@@ -82,11 +86,14 @@ def insert_nodes(nodes: list[dict]) -> None:
     for node in nodes:
         vec = embed(node["content"])
         vec_str = json.dumps(vec)
+        node_id = node["id"].replace("'", "\\'")
+        label = node["label"].replace("'", "\\'")
+        content = node["content"].replace("'", "\\'")
         surreal_query(f"""
-            CREATE concept:{node['id']} SET
-                node_id   = '{node['id']}',
-                label     = '{node['label']}',
-                content   = '{node['content']}',
+            CREATE concept:{node_id} SET
+                node_id   = '{node_id}',
+                label     = '{label}',
+                content   = '{content}',
                 embedding = {vec_str};
         """)
         print(f"  ✓ ノード挿入: {node['label']}")
@@ -95,9 +102,10 @@ def insert_nodes(nodes: list[dict]) -> None:
 def insert_edges(edges: list[dict]) -> None:
     """エッジ（グラフ関係）を SurrealDB に挿入する。"""
     for edge in edges:
+        relation = edge["relation"].replace("'", "\\'")
         surreal_query(f"""
             RELATE concept:{edge['from']}->has_relation->concept:{edge['to']}
-                SET relation = '{edge['relation']}';
+                SET relation = '{relation}';
         """)
         print(f"  ✓ エッジ挿入: {edge['from']} --[{edge['relation']}]--> {edge['to']}")
 
@@ -110,6 +118,8 @@ def vector_search(query_vec: list[float], top_k: int = 3) -> list[dict]:
         FROM concept
         WHERE embedding <|{top_k},COSINE|> {vec_str};
     """)
+    if not result:
+        return []
     return result[0].get("result", [])
 
 
@@ -121,6 +131,8 @@ def graph_traverse(node_ids: list[str]) -> list[dict]:
             SELECT ->has_relation->concept.* AS related
             FROM concept:{nid};
         """)
+        if not result:
+            continue
         for row in result[0].get("result", []):
             for r in row.get("related", []):
                 if r:
