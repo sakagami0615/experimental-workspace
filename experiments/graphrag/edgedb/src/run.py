@@ -51,7 +51,8 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     """2つのベクトルのコサイン類似度を計算する。"""
     va = np.array(a, dtype=np.float64)
     vb = np.array(b, dtype=np.float64)
-    return float(np.dot(va, vb) / (np.linalg.norm(va) * np.linalg.norm(vb)))
+    denom = np.linalg.norm(va) * np.linalg.norm(vb)
+    return float(np.dot(va, vb) / denom) if denom != 0.0 else 0.0
 
 
 def setup_schema(client: edgedb.Client) -> None:
@@ -160,53 +161,55 @@ def main() -> None:
     data = json.loads(DATA_PATH.read_text(encoding="utf-8"))
     client = edgedb.create_client(dsn=EDGEDB_DSN)
 
-    # 埋め込み次元を検出
-    print("[1/5] 埋め込み次元を検出中...")
-    probe_vec = embed("test")
-    dims = len(probe_vec)
-    print(f"  埋め込み次元: {dims}\n")
+    try:
+        # 埋め込み次元を検出
+        print("[1/5] 埋め込み次元を検出中...")
+        probe_vec = embed("test")
+        dims = len(probe_vec)
+        print(f"  埋め込み次元: {dims}\n")
 
-    # スキーマ設定
-    print("[2/5] スキーマを設定中...")
-    setup_schema(client)
-    print("  ✓ スキーマ設定完了\n")
+        # スキーマ設定
+        print("[2/5] スキーマを設定中...")
+        setup_schema(client)
+        print("  ✓ スキーマ設定完了\n")
 
-    # ノード挿入
-    print("[3/5] ノードを挿入中...")
-    insert_nodes(client, data["nodes"])
-    print()
+        # ノード挿入
+        print("[3/5] ノードを挿入中...")
+        insert_nodes(client, data["nodes"])
+        print()
 
-    # エッジ挿入
-    print("[4/5] エッジを挿入中...")
-    insert_edges(client, data["edges"])
-    print()
+        # エッジ挿入
+        print("[4/5] エッジを挿入中...")
+        insert_edges(client, data["edges"])
+        print()
 
-    # クエリ実行
-    question = data["query"]
-    print(f"[5/5] クエリ実行: {question}\n")
+        # クエリ実行
+        question = data["query"]
+        print(f"[5/5] クエリ実行: {question}\n")
 
-    query_vec = embed(question)
-    vector_hits = vector_search(client, query_vec, top_k=3)
-    print(f"  ベクトル検索ヒット: {[h['label'] for h in vector_hits]}")
+        query_vec = embed(question)
+        vector_hits = vector_search(client, query_vec, top_k=3)
+        print(f"  ベクトル検索ヒット: {[h['label'] for h in vector_hits]}")
 
-    graph_hits = graph_traverse(client, [h["node_id"] for h in vector_hits])
-    print(f"  グラフ展開ヒット: {[h.get('label', '?') for h in graph_hits]}\n")
+        graph_hits = graph_traverse(client, [h["node_id"] for h in vector_hits])
+        print(f"  グラフ展開ヒット: {[h.get('label', '?') for h in graph_hits]}\n")
 
-    all_nodes = vector_hits + graph_hits
-    seen = set()
-    unique_nodes = []
-    for n in all_nodes:
-        if n.get("node_id") and n["node_id"] not in seen:
-            seen.add(n["node_id"])
-            unique_nodes.append(n)
+        all_nodes = vector_hits + graph_hits
+        seen = set()
+        unique_nodes = []
+        for n in all_nodes:
+            if n.get("node_id") and n["node_id"] not in seen:
+                seen.add(n["node_id"])
+                unique_nodes.append(n)
 
-    context = "\n".join(f"- {n['label']}: {n['content']}" for n in unique_nodes)
-    answer = generate(context, question)
+        context = "\n".join(f"- {n['label']}: {n['content']}" for n in unique_nodes)
+        answer = generate(context, question)
 
-    print("=== 回答 ===")
-    print(answer)
+        print("=== 回答 ===")
+        print(answer)
 
-    client.close()
+    finally:
+        client.close()
 
 
 if __name__ == "__main__":
