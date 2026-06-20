@@ -102,9 +102,11 @@ def insert_nodes(nodes: list[dict]) -> None:
 def insert_edges(edges: list[dict]) -> None:
     """エッジ（グラフ関係）を SurrealDB に挿入する。"""
     for edge in edges:
+        from_id = edge["from"].replace("'", "\\'")
+        to_id = edge["to"].replace("'", "\\'")
         relation = edge["relation"].replace("'", "\\'")
         surreal_query(f"""
-            RELATE concept:{edge['from']}->has_relation->concept:{edge['to']}
+            RELATE concept:{from_id}->has_relation->concept:{to_id}
                 SET relation = '{relation}';
         """)
         print(f"  ✓ エッジ挿入: {edge['from']} --[{edge['relation']}]--> {edge['to']}")

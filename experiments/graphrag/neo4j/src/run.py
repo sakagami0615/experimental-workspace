@@ -90,6 +90,12 @@ def insert_edges(driver: GraphDatabase, edges: list[dict]) -> None:
             print(f"  ✓ エッジ挿入: {edge['from']} --[{edge['relation']}]--> {edge['to']}")
 
 
+def wait_for_index(driver: GraphDatabase) -> None:
+    """ベクトルインデックスが利用可能になるまで待機する。"""
+    with driver.session() as session:
+        session.run("CALL db.index.vector.awaitIndexOnline('concept_embedding', 300)")
+
+
 def vector_search(driver: GraphDatabase, query_vec: list[float], top_k: int = 3) -> list[dict]:
     """ベクトルインデックスで類似ノードを取得する。"""
     with driver.session() as session:
@@ -146,6 +152,9 @@ def main() -> None:
         print("[4/5] エッジを挿入中...")
         insert_edges(driver, data["edges"])
         print()
+
+        # インデックス待機
+        wait_for_index(driver)
 
         # クエリ実行
         question = data["query"]

@@ -52,7 +52,7 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     va = np.array(a, dtype=np.float64)
     vb = np.array(b, dtype=np.float64)
     denom = np.linalg.norm(va) * np.linalg.norm(vb)
-    return float(np.dot(va, vb) / denom) if denom != 0.0 else 0.0
+    return float(np.dot(va, vb) / denom) if denom > 1e-10 else 0.0
 
 
 def setup_schema(client: edgedb.Client) -> None:
@@ -162,30 +162,24 @@ def main() -> None:
     client = edgedb.create_client(dsn=EDGEDB_DSN)
 
     try:
-        # 埋め込み次元を検出
-        print("[1/5] 埋め込み次元を検出中...")
-        probe_vec = embed("test")
-        dims = len(probe_vec)
-        print(f"  埋め込み次元: {dims}\n")
-
         # スキーマ設定
-        print("[2/5] スキーマを設定中...")
+        print("[1/4] スキーマを設定中...")
         setup_schema(client)
         print("  ✓ スキーマ設定完了\n")
 
         # ノード挿入
-        print("[3/5] ノードを挿入中...")
+        print("[2/4] ノードを挿入中...")
         insert_nodes(client, data["nodes"])
         print()
 
         # エッジ挿入
-        print("[4/5] エッジを挿入中...")
+        print("[3/4] エッジを挿入中...")
         insert_edges(client, data["edges"])
         print()
 
         # クエリ実行
         question = data["query"]
-        print(f"[5/5] クエリ実行: {question}\n")
+        print(f"[4/4] クエリ実行: {question}\n")
 
         query_vec = embed(question)
         vector_hits = vector_search(client, query_vec, top_k=3)
