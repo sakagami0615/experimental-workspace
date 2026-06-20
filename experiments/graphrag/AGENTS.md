@@ -11,8 +11,6 @@ SurrealDB / Neo4j / EdgeDB の3種類のDBを使ってGraphRAGパイプライン
 
 ## 各環境の起動方法
 
-> **注意:** 以下のコマンド（特に `docker compose run --rm python`）は、Tasks 3〜5 で各 DB 環境の `docker-compose.yml` および `python` サービスが実装された後に使用可能になります。
-
 各 DB フォルダ内で以下を実行:
 
 ```bash
@@ -22,12 +20,29 @@ cp .env.example .env
 # DB コンテナを起動
 docker compose up -d <db-service>
 
-# GraphRAG スクリプトを実行
-docker compose run --rm python python src/run.py
+# [1] グラフ構築（スキーマ作成 + データ投入）
+docker compose run --rm python python src/build.py
+
+# [2] データ更新（JSONファイルを引数で指定、省略時は data/sample.json を使用）
+docker compose run --rm python python src/update.py [data/your_data.json]
+
+# [3] 回答生成（質問を引数で指定）
+docker compose run --rm python python src/query.py "質問文"
 
 # 後片付け
 docker compose down -v
 ```
+
+### スクリプト構成
+
+各 DB フォルダの `src/` には以下の4ファイルがある:
+
+| ファイル | 役割 |
+|---|---|
+| `common.py` | 共有ユーティリティ（`embed`, `generate`, DB接続ヘルパー） |
+| `build.py` | スキーマ作成 + 初回データ投入 |
+| `update.py` | 既存グラフへのノード・エッジのアップサート |
+| `query.py` | クエリ検索 + LLM回答生成 |
 
 ## 環境変数（.env）
 
