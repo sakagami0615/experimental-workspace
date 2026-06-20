@@ -11,6 +11,8 @@ SurrealDB / Neo4j / EdgeDB の3種類のDBを使ってGraphRAGパイプライン
 
 ## 各環境の起動方法
 
+> **注意:** 以下のコマンド（特に `docker compose run --rm python`）は、Tasks 3〜5 で各 DB 環境の `docker-compose.yml` および `python` サービスが実装された後に使用可能になります。
+
 各 DB フォルダ内で以下を実行:
 
 ```bash
