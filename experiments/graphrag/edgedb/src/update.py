@@ -12,14 +12,16 @@ from pathlib import Path
 
 import edgedb
 
-from common import embed, get_client
+from common import get_client, get_embeddings
 
 DATA_PATH = Path(__file__).parent.parent / "data" / "sample.json"
 
 
 def upsert_data(client: edgedb.Client, data: dict) -> None:
     """ノードをアップサートし、エッジを追加する。"""
+    embeddings = get_embeddings()
     for node in data["nodes"]:
+        emb = embeddings.embed_query(node["content"])
         client.query(
             "INSERT default::Concept { node_id:=<str>$nid, label:=<str>$label, "
             "content:=<str>$content, embedding:=<array<float64>>$emb } "
@@ -27,7 +29,7 @@ def upsert_data(client: edgedb.Client, data: dict) -> None:
             "  UPDATE default::Concept FILTER .node_id=<str>$nid "
             "  SET { label:=<str>$label, content:=<str>$content, embedding:=<array<float64>>$emb }"
             ");",
-            nid=node["id"], label=node["label"], content=node["content"], emb=embed(node["content"]))
+            nid=node["id"], label=node["label"], content=node["content"], emb=emb)
         print(f"  upsert: {node['label']}")
     for edge in data["edges"]:
         client.query(

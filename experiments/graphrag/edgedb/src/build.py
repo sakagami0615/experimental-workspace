@@ -5,7 +5,7 @@ from pathlib import Path
 
 import edgedb
 
-from common import embed, get_client
+from common import get_client, get_embeddings
 
 DATA_PATH = Path(__file__).parent.parent / "data" / "sample.json"
 
@@ -25,11 +25,13 @@ def setup_schema(client: edgedb.Client) -> None:
 
 def load_data(client: edgedb.Client, data: dict) -> None:
     """ノードを埋め込みと共に挿入し、エッジをリンクとして設定する。"""
+    embeddings = get_embeddings()
     for node in data["nodes"]:
+        emb = embeddings.embed_query(node["content"])
         client.query(
             "INSERT default::Concept { node_id:=<str>$nid, label:=<str>$label, "
             "content:=<str>$content, embedding:=<array<float64>>$emb } UNLESS CONFLICT ON .node_id;",
-            nid=node["id"], label=node["label"], content=node["content"], emb=embed(node["content"]))
+            nid=node["id"], label=node["label"], content=node["content"], emb=emb)
         print(f"  node: {node['label']}")
     for edge in data["edges"]:
         client.query(

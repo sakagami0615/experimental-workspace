@@ -4,32 +4,39 @@
     python src/query.py "質問文"
 """
 
-import json
 import sys
 
-from common import embed, generate, surreal_query
+from langchain_surrealdb.vectorstores import SurrealDBVectorStore
+
+from common import generate, get_connection, get_embeddings
+
+TABLE = "concept"
 
 
-def retrieve(query_vec: list[float], top_k: int = 3) -> list[dict]:
-    """ベクトルKNN検索とグラフ展開で重複なしのコンテキストノードを返す。"""
-    res = surreal_query(
-        f"SELECT node_id, label, content FROM concept WHERE embedding <|{top_k},COSINE|> {json.dumps(query_vec)};")
-    hits = res[0].get("result", []) if res else []
-    print(f"  ベクトルヒット: {[h['label'] for h in hits]}")
-    related: list[dict] = []
-    for nid in [h["node_id"] for h in hits]:
-        rows = surreal_query(f"SELECT ->has_relation->concept.* AS related FROM concept:{nid};")
-        if rows:
-            for row in rows[0].get("result", []):
-                related.extend(r for r in row.get("related", []) if r)
-    print(f"  グラフ展開: {[r.get('label', '?') for r in related]}")
-    seen: set[str] = set()
-    unique = []
-    for n in hits + related:
-        if n.get("node_id") and n["node_id"] not in seen:
-            seen.add(n["node_id"])
-            unique.append(n)
-    return unique
+def retrieve(question: str, top_k: int = 3) -> list[dict]:
+    """ベクトル検索とグラフ展開で重複なしのコンテキストノードを返す。"""
+    conn = get_connection()
+    store = SurrealDBVectorStore(embedding=get_embeddings(), connection=conn, table=TABLE)
+
+    hits = store.similarity_search(question, k=top_k)
+    print(f"  ベクトルヒット: {[d.metadata.get('label') for d in hits]}")
+
+    contexts = [{"label": d.metadata.get("label", ""), "content": d.page_content} for d in hits]
+    seen = {d.metadata.get("node_id") for d in hits}
+
+    for doc in hits:
+        nid = doc.metadata.get("node_id")
+        if not nid:
+            continue
+        rows = conn.query(f"SELECT ->has_relation->{TABLE}.* AS related FROM {TABLE}:⟨{nid}⟩;")
+        for row in (rows or []):
+            for r in row.get("related", []):
+                if r and r.get("node_id") not in seen:
+                    seen.add(r["node_id"])
+                    contexts.append({"label": r.get("label", ""), "content": r.get("content", "")})
+
+    print(f"  コンテキストノード数: {len(contexts)}")
+    return contexts
 
 
 def main() -> None:
@@ -39,9 +46,9 @@ def main() -> None:
         sys.exit(1)
     question = sys.argv[1]
     print(f"=== SurrealDB Query ===\n質問: {question}\n")
-    nodes = retrieve(embed(question))
-    context = "\n".join(f"- {n['label']}: {n['content']}" for n in nodes)
-    print(f"\n=== 回答 ===\n{generate(context, question)}")
+    contexts = retrieve(question)
+    context_text = "\n".join(f"- {c['label']}: {c['content']}" for c in contexts)
+    print(f"\n=== 回答 ===\n{generate(context_text, question)}")
 
 
 if __name__ == "__main__":

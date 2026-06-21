@@ -1,51 +1,48 @@
-"""グラフを新規構築する（スキーマ作成 + データ投入）。"""
+"""グラフを新規構築する（ベクトルインデックス作成 + データ投入）。"""
 
 import json
 from pathlib import Path
 
-from neo4j import Driver
+from langchain_core.documents import Document
+from langchain_neo4j import Neo4jVector
 
-from common import embed, get_driver
+from common import NEO4J_PASS, NEO4J_URI, NEO4J_USER, get_embeddings, get_graph
 
 DATA_PATH = Path(__file__).parent.parent / "data" / "sample.json"
+INDEX_NAME = "concept_embedding"
+NODE_LABEL = "Concept"
 
 
-def setup_schema(driver: Driver, dims: int) -> None:
-    """制約とベクトルインデックスを作成する。"""
-    with driver.session() as s:
-        s.run("CREATE CONSTRAINT concept_node_id IF NOT EXISTS FOR (n:Concept) REQUIRE n.node_id IS UNIQUE")
-        s.run(f"CREATE VECTOR INDEX concept_embedding IF NOT EXISTS FOR (n:Concept) ON (n.embedding) "
-              f"OPTIONS {{indexConfig: {{`vector.dimensions`: {dims}, `vector.similarity_function`: 'cosine'}}}}")
+def build_graph(data: dict) -> None:
+    """ノードをベクトルストアに登録し、エッジをCypherで作成する。"""
+    docs = [
+        Document(page_content=node["content"], metadata={"node_id": node["id"], "label": node["label"]})
+        for node in data["nodes"]
+    ]
+    Neo4jVector.from_documents(
+        docs, get_embeddings(),
+        url=NEO4J_URI, username=NEO4J_USER, password=NEO4J_PASS,
+        index_name=INDEX_NAME, node_label=NODE_LABEL,
+        text_node_property="content", embedding_node_property="embedding",
+    )
+    print(f"  {len(docs)} ノードを登録しました。")
 
-
-def load_data(driver: Driver, data: dict) -> None:
-    """ノードとエッジを挿入し、ベクトルインデックスが利用可能になるまで待機する。"""
-    with driver.session() as s:
-        for node in data["nodes"]:
-            s.run("MERGE (n:Concept {node_id: $id}) SET n.label=$label, n.content=$content, n.embedding=$emb",
-                  id=node["id"], label=node["label"], content=node["content"], emb=embed(node["content"]))
-            print(f"  node: {node['label']}")
-        for edge in data["edges"]:
-            s.run("MATCH (a:Concept {node_id: $f}), (b:Concept {node_id: $t}) "
-                  "MERGE (a)-[:HAS_RELATION {relation: $r}]->(b)",
-                  f=edge["from"], t=edge["to"], r=edge["relation"])
-        s.run("CALL db.index.vector.awaitIndexOnline('concept_embedding', 300)")
+    graph = get_graph()
+    for edge in data["edges"]:
+        graph.query(
+            "MATCH (a:Concept {node_id: $f}), (b:Concept {node_id: $t}) "
+            "MERGE (a)-[:HAS_RELATION {relation: $r}]->(b)",
+            params={"f": edge["from"], "t": edge["to"], "r": edge["relation"]},
+        )
+    print(f"  {len(data['edges'])} エッジを作成しました。")
 
 
 def main() -> None:
     """グラフを構築する。"""
     print("=== Neo4j Build ===\n")
     data = json.loads(DATA_PATH.read_text(encoding="utf-8"))
-    dims = len(embed("test"))
-    driver = get_driver()
-    try:
-        print(f"[1/2] スキーマ設定（次元: {dims}）...")
-        setup_schema(driver, dims)
-        print("[2/2] データ投入...")
-        load_data(driver, data)
-        print("\n完了。グラフを構築しました。")
-    finally:
-        driver.close()
+    build_graph(data)
+    print("\n完了。グラフを構築しました。")
 
 
 if __name__ == "__main__":

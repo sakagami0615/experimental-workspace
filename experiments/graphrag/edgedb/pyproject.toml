@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "graphrag-edgedb"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "langchain-ollama",
+    "edgedb==2.1.0",
+    "numpy==2.1.3",
+]
+
+[tool.setuptools]
+packages = []

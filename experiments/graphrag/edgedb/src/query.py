@@ -8,11 +8,12 @@ import sys
 
 import edgedb
 
-from common import cosine_similarity, embed, generate, get_client
+from common import cosine_similarity, generate, get_client, get_embeddings
 
 
-def retrieve(client: edgedb.Client, query_vec: list[float], top_k: int = 3) -> list[dict]:
+def retrieve(client: edgedb.Client, question: str, top_k: int = 3) -> list[dict]:
     """Python側コサイン類似度によるベクトル検索とグラフ展開で重複なしのコンテキストノードを返す。"""
+    query_vec = get_embeddings().embed_query(question)
     all_nodes = client.query("SELECT default::Concept { node_id, label, content, embedding }")
     scored = sorted(
         [{"node_id": n.node_id, "label": n.label, "content": n.content,
@@ -21,6 +22,7 @@ def retrieve(client: edgedb.Client, query_vec: list[float], top_k: int = 3) -> l
         key=lambda x: x["score"], reverse=True)
     hits = scored[:top_k]
     print(f"  ベクトルヒット: {[h['label'] for h in hits]}")
+
     related: list[dict] = []
     for nid in [h["node_id"] for h in hits]:
         for row in client.query(
@@ -28,13 +30,14 @@ def retrieve(client: edgedb.Client, query_vec: list[float], top_k: int = 3) -> l
                 id=nid):
             related += [{"node_id": r.node_id, "label": r.label, "content": r.content}
                         for r in row.related_concepts]
-    print(f"  グラフ展開: {[r.get('label', '?') for r in related]}")
+
     seen: set[str] = set()
     unique = []
     for n in hits + related:
         if n.get("node_id") and n["node_id"] not in seen:
             seen.add(n["node_id"])
             unique.append(n)
+    print(f"  コンテキストノード数: {len(unique)}")
     return unique
 
 
@@ -47,7 +50,7 @@ def main() -> None:
     print(f"=== EdgeDB Query ===\n質問: {question}\n")
     client = get_client()
     try:
-        nodes = retrieve(client, embed(question))
+        nodes = retrieve(client, question)
         context = "\n".join(f"- {n['label']}: {n['content']}" for n in nodes)
         print(f"\n=== 回答 ===\n{generate(context, question)}")
     finally:

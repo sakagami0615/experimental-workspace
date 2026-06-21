@@ -58,3 +58,4 @@ docker compose down -v
 - OllamaのモデルはRunするたびに変更可能（`.env` を編集）
 - Linux では `host.docker.internal` が自動解決されないため、`docker-compose.yml` の `extra_hosts` で対応済み
 - 各DBの詳細は `memo.txt` を参照
+- パッケージインストールには `uv` を使用し、Dockerfile内では `pip install uv --no-cache-dir && uv pip install --system --no-cache -r requirements.txt` のパターンを使うこと。`pip install` を直接書かない。
