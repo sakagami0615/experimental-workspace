@@ -11,16 +11,19 @@ DATA_PATH = Path(__file__).parent.parent / "data" / "sample.json"
 
 
 def setup_schema(client: edgedb.Client) -> None:
-    """EdgeDBにスキーマを作成する（devmodeではDDLを直接実行可能）。"""
-    client.execute("""
-        CREATE TYPE IF NOT EXISTS default::Concept {
-            CREATE REQUIRED PROPERTY node_id -> str { CREATE CONSTRAINT exclusive; };
-            CREATE REQUIRED PROPERTY label -> str;
-            CREATE REQUIRED PROPERTY content -> str;
-            CREATE PROPERTY embedding -> array<float64>;
-            CREATE MULTI LINK related_concepts -> default::Concept;
-        };
-    """)
+    """EdgeDBにスキーマを作成する。"""
+    try:
+        client.execute("""
+            CREATE TYPE default::Concept {
+                CREATE REQUIRED PROPERTY node_id -> str { CREATE CONSTRAINT exclusive; };
+                CREATE REQUIRED PROPERTY label -> str;
+                CREATE REQUIRED PROPERTY content -> str;
+                CREATE PROPERTY embedding -> array<float64>;
+                CREATE MULTI LINK related_concepts -> default::Concept;
+            };
+        """)
+    except edgedb.errors.SchemaDefinitionError:
+        pass
 
 
 def load_data(client: edgedb.Client, data: dict) -> None:

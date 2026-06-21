@@ -35,6 +35,11 @@ def get_connection() -> BlockingHttpSurrealConnection:
     return conn
 
 
+def surreal_query(query: str) -> list:
+    """SurrealDBにクエリを実行して結果を返す。"""
+    return get_connection().query(query)
+
+
 def generate(context: str, question: str) -> str:
     """Ollamaでコンテキストを元に回答を生成する。"""
     prompt = f"以下の情報を参考に質問に答えてください。\n\nコンテキスト:\n{context}\n\n質問: {question}\n\n回答:"
