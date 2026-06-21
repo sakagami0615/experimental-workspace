@@ -7,6 +7,7 @@ name = "graphrag-edgedb"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
+    "langchain-core",
     "langchain-ollama",
     "edgedb==2.1.0",
     "numpy==2.1.3",

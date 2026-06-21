@@ -13,7 +13,7 @@ from pathlib import Path
 from langchain_core.documents import Document
 from langchain_neo4j import Neo4jVector
 
-from common import NEO4J_PASS, NEO4J_URI, NEO4J_USER, get_embeddings, get_graph
+from common import NEO4J_PASS, NEO4J_URI, NEO4J_USER, extract_relations, get_embeddings, get_graph
 
 DATA_PATH = Path(__file__).parent.parent / "data" / "sample.json"
 INDEX_NAME = "concept_embedding"
@@ -35,14 +35,16 @@ def upsert_graph(data: dict) -> None:
     store.add_documents(docs)
     print(f"  {len(docs)} ノードをアップサートしました。")
 
+    print("  LLMでノード間の関係を抽出中...")
+    edges = extract_relations(data["nodes"])
     graph = get_graph()
-    for edge in data["edges"]:
+    for edge in edges:
         graph.query(
             "MATCH (a:Concept {node_id: $f}), (b:Concept {node_id: $t}) "
             "MERGE (a)-[:HAS_RELATION {relation: $r}]->(b)",
-            params={"f": edge["from"], "t": edge["to"], "r": edge["relation"]},
+            params={"f": edge.source, "t": edge.target, "r": edge.relation},
         )
-    print(f"  {len(data['edges'])} エッジを追加しました。")
+    print(f"  {len(edges)} エッジを追加しました。")
 
 
 def main() -> None:

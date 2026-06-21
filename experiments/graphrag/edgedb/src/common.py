@@ -1,6 +1,8 @@
 """EdgeDB GraphRAG 共有ユーティリティ。"""
 
+import json
 import os
+import re
 
 import edgedb
 import numpy as np
@@ -38,3 +40,21 @@ def generate(context: str, question: str) -> str:
     """Ollamaでコンテキストを元に回答を生成する。"""
     prompt = f"以下の情報を参考に質問に答えてください。\n\nコンテキスト:\n{context}\n\n質問: {question}\n\n回答:"
     return get_llm().invoke(prompt).content
+
+
+def extract_entities(question: str) -> list[str]:
+    """LLMでクエリからグラフ検索用のキーワード・エンティティを抽出する。"""
+    prompt = (
+        "以下の質問から、グラフ検索に使うキーワードや概念名を抽出してください。\n"
+        "JSON配列形式（例: [\"GraphRAG\", \"ベクトル検索\"]）のみ返してください。\n"
+        f"質問: {question}\n"
+        "キーワード:"
+    )
+    result = get_llm().invoke(prompt).content.strip()
+    match = re.search(r"\[.*?\]", result, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group())
+        except json.JSONDecodeError:
+            pass
+    return [question]
