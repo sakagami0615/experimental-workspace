@@ -1,0 +1,35 @@
+{
+  "nodes": [
+    {
+      "id": "graphrag",
+      "label": "GraphRAG",
+      "content": "GraphRAGはグラフ構造を活用したRAG手法で、ドキュメント間の関係をグラフとして保持し、ベクトル検索とグラフトラバースを組み合わせて回答精度を向上させる技術。"
+    },
+    {
+      "id": "rag",
+      "label": "RAG",
+      "content": "RAG（Retrieval-Augmented Generation）は、LLMの回答生成時に外部ドキュメントを検索して取得し、コンテキストとして付与することで事実に基づいた回答を可能にする手法。"
+    },
+    {
+      "id": "vector_search",
+      "label": "ベクトル検索",
+      "content": "テキストを高次元ベクトルに変換し、コサイン類似度などの指標でクエリと意味的に近いドキュメントを高速に検索する技術。HNSWなどの近似最近傍アルゴリズムが使われる。"
+    },
+    {
+      "id": "graph_db",
+      "label": "グラフDB",
+      "content": "データをノードとエッジで表現するデータベース。複雑な関係の探索や多段階トラバースが得意で、Neo4j、SurrealDB、EdgeDBなどが代表的な製品。"
+    },
+    {
+      "id": "llm",
+      "label": "LLM",
+      "content": "大規模言語モデル（Large Language Model）は大量のテキストデータで学習した自然言語処理モデル。GPT、Llama、Gemmaなどが代表的で、テキスト生成・要約・翻訳などに活用される。"
+    },
+    {
+      "id": "embedding",
+      "label": "埋め込みモデル",
+      "content": "テキストを固定長の高次元ベクトルに変換するモデル。意味的に近いテキストは近いベクトルになる。nomic-embed-text、text-embedding-3-smallなどが代表的。"
+    }
+  ],
+  "query":"GraphRAGとは何か？どのような技術を使うか説明してください。"
+}

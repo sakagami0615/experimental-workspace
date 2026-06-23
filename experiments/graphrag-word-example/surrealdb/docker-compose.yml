@@ -1,0 +1,26 @@
+services:
+  surrealdb:
+    image: surrealdb/surrealdb:v2
+    command: start --log trace --user root --pass root memory
+    healthcheck:
+      test: ["CMD", "/surreal", "is-ready", "--endpoint", "http://localhost:8000"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  python:
+    build: .
+    depends_on:
+      surrealdb:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - SURREAL_URL=http://surrealdb:8000
+      - SURREAL_USER=root
+      - SURREAL_PASS=root
+      - SURREAL_NS=graphrag_ns
+      - SURREAL_DB=graphrag_db
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
