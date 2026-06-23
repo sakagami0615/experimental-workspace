@@ -5,7 +5,7 @@ from pathlib import Path
 
 import edgedb
 
-from common import get_client, get_embeddings
+from common import extract_relations, get_client, get_embeddings
 
 DATA_PATH = Path(__file__).parent.parent / "data" / "sample.json"
 
@@ -27,7 +27,7 @@ def setup_schema(client: edgedb.Client) -> None:
 
 
 def load_data(client: edgedb.Client, data: dict) -> None:
-    """ノードを埋め込みと共に挿入し、エッジをリンクとして設定する。"""
+    """ノードを埋め込みと共に挿入し、LLMで抽出した関係をリンクとして設定する。"""
     embeddings = get_embeddings()
     for node in data["nodes"]:
         emb = embeddings.embed_query(node["content"])
@@ -36,11 +36,17 @@ def load_data(client: edgedb.Client, data: dict) -> None:
             "content:=<str>$content, embedding:=<array<float64>>$emb } UNLESS CONFLICT ON .node_id;",
             nid=node["id"], label=node["label"], content=node["content"], emb=emb)
         print(f"  node: {node['label']}")
-    for edge in data["edges"]:
+
+    print("  LLMでノード間の関係を抽出中...")
+    edges = extract_relations(data["nodes"])
+    for edge in edges:
         client.query(
             "UPDATE default::Concept FILTER .node_id=<str>$fid "
             "SET { related_concepts += (SELECT default::Concept FILTER .node_id=<str>$tid) };",
-            fid=edge["from"], tid=edge["to"])
+            fid=edge.source,
+            tid=edge.target,
+        )
+    print(f"  {len(edges)} エッジを作成しました。")
 
 
 def main() -> None:

@@ -12,13 +12,13 @@ from pathlib import Path
 
 import edgedb
 
-from common import get_client, get_embeddings
+from common import extract_relations, get_client, get_embeddings
 
 DATA_PATH = Path(__file__).parent.parent / "data" / "sample.json"
 
 
 def upsert_data(client: edgedb.Client, data: dict) -> None:
-    """ノードをアップサートし、エッジを追加する。"""
+    """ノードをアップサートし、LLMで抽出した関係を追加する。"""
     embeddings = get_embeddings()
     for node in data["nodes"]:
         emb = embeddings.embed_query(node["content"])
@@ -26,17 +26,23 @@ def upsert_data(client: edgedb.Client, data: dict) -> None:
             "INSERT default::Concept { node_id:=<str>$nid, label:=<str>$label, "
             "content:=<str>$content, embedding:=<array<float64>>$emb } "
             "UNLESS CONFLICT ON .node_id ELSE ("
-            "  UPDATE default::Concept FILTER .node_id=<str>$nid "
+            "  UPDATE default::Concept "
             "  SET { label:=<str>$label, content:=<str>$content, embedding:=<array<float64>>$emb }"
             ");",
             nid=node["id"], label=node["label"], content=node["content"], emb=emb)
         print(f"  upsert: {node['label']}")
-    for edge in data["edges"]:
+
+    print("  LLMでノード間の関係を抽出中...")
+    edges = extract_relations(data["nodes"])
+    for edge in edges:
         client.query(
             "UPDATE default::Concept FILTER .node_id=<str>$fid "
             "SET { related_concepts += (SELECT default::Concept FILTER .node_id=<str>$tid) };",
-            fid=edge["from"], tid=edge["to"])
-        print(f"  edge: {edge['from']} -> {edge['to']}")
+            fid=edge.source,
+            tid=edge.target,
+        )
+        print(f"  edge: {edge.source} -> {edge.target}")
+    print(f"  {len(edges)} エッジを追加しました。")
 
 
 def main() -> None:

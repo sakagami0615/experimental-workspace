@@ -7,11 +7,27 @@ import re
 import edgedb
 import numpy as np
 from langchain_ollama import ChatOllama, OllamaEmbeddings
+from pydantic import BaseModel, Field
 
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
 OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
 OLLAMA_LLM_MODEL = os.getenv("OLLAMA_LLM_MODEL", "llama3.2")
 EDGEDB_DSN = os.getenv("EDGEDB_DSN", "edgedb://edgedb@localhost:5656/edgedb?tls_security=insecure")
+ALLOWED_RELATIONS = {"USES", "EXTENDS", "REQUIRES", "PART_OF", "RELATED_TO"}
+
+
+class Relation(BaseModel):
+    """概念間の関係を表す。"""
+
+    source: str = Field(description="関係元ノードのID")
+    target: str = Field(description="関係先ノードのID")
+    relation: str = Field(description="USES / EXTENDS / REQUIRES / PART_OF / RELATED_TO のいずれか")
+
+
+class RelationList(BaseModel):
+    """LLMが抽出した関係の一覧。"""
+
+    relations: list[Relation]
 
 
 def get_embeddings() -> OllamaEmbeddings:
@@ -40,6 +56,26 @@ def generate(context: str, question: str) -> str:
     """Ollamaでコンテキストを元に回答を生成する。"""
     prompt = f"以下の情報を参考に質問に答えてください。\n\nコンテキスト:\n{context}\n\n質問: {question}\n\n回答:"
     return get_llm().invoke(prompt).content
+
+
+def extract_relations(nodes: list[dict]) -> list[Relation]:
+    """LLMでノード一覧から関係を自動抽出する。"""
+    ids = [n["id"] for n in nodes]
+    node_list = "\n".join(f'- {n["id"]}: {n["label"]} - {n["content"]}' for n in nodes)
+    prompt = (
+        "以下の概念リストから、概念間の関係を抽出してください。\n"
+        f"source と target のIDは必ず次のリストから選んでください: {ids}\n"
+        "relationはUSES, EXTENDS, REQUIRES, PART_OF, RELATED_TOのいずれかを使ってください。\n"
+        "明確な関係がない場合は省略してください。\n\n"
+        f"概念リスト:\n{node_list}"
+    )
+    llm = get_llm().with_structured_output(RelationList)
+    result: RelationList = llm.invoke(prompt)
+    valid_ids = set(ids)
+    return [
+        r for r in result.relations
+        if r.source in valid_ids and r.target in valid_ids and r.relation in ALLOWED_RELATIONS
+    ]
 
 
 def extract_entities(question: str) -> list[str]:

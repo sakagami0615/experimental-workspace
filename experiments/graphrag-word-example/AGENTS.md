@@ -20,7 +20,7 @@ cp .env.example .env
 # DB コンテナを起動
 docker compose up -d <db-service>
 
-# [1] グラフ構築（スキーマ作成 + データ投入）
+# [1] グラフ構築（スキーマ作成 + ノード投入 + エッジ作成）
 docker compose run --rm python python src/build.py
 
 # [2] データ更新（JSONファイルを引数で指定、省略時は data/sample.json を使用）
@@ -40,7 +40,7 @@ docker compose down -v
 | ファイル | 役割 |
 |---|---|
 | `common.py` | 共有ユーティリティ（`embed`, `generate`, DB接続ヘルパー） |
-| `build.py` | スキーマ作成 + 初回データ投入 |
+| `build.py` | スキーマ作成 + 初回ノード投入 + エッジ作成 |
 | `update.py` | 既存グラフへのノード・エッジのアップサート |
 | `query.py` | クエリ検索 + LLM回答生成 |
 

@@ -6,28 +6,39 @@ from pathlib import Path
 from langchain_core.documents import Document
 from langchain_surrealdb.vectorstores import SurrealDBVectorStore
 
-from common import get_connection, get_embeddings, surreal_query
+from common import extract_relations, get_connection, get_embeddings, surreal_query
 
 DATA_PATH = Path(__file__).parent.parent / "data" / "sample.json"
 TABLE = "concept"
 
 
 def build_graph(data: dict) -> None:
-    """ノードをベクトルストアに登録し、エッジをSurrealDBのRELATEで作成する。"""
+    """ノードをベクトルストアに登録し、LLMで抽出した関係をRELATEで作成する。"""
     conn = get_connection()
     embeddings = get_embeddings()
 
     docs = [
-        Document(page_content=node["content"], metadata={"node_id": node["id"], "label": node["label"]})
+        Document(id=node["id"], page_content=node["content"], metadata={"node_id": node["id"], "label": node["label"]})
         for node in data["nodes"]
     ]
     store = SurrealDBVectorStore.from_documents(docs, embeddings, connection=conn, table=TABLE)
+    for node in data["nodes"]:
+        conn.query(
+            f"UPDATE {TABLE}:⟨{node['id']}⟩ SET "
+            f"node_id = {json.dumps(node['id'], ensure_ascii=False)}, "
+            f"label = {json.dumps(node['label'], ensure_ascii=False)}, "
+            f"content = {json.dumps(node['content'], ensure_ascii=False)};"
+        )
     print(f"  {len(docs)} ノードを登録しました。")
 
-    for edge in data["edges"]:
-        fid, tid, rel = edge["from"], edge["to"], edge["relation"]
-        conn.query(f"RELATE {TABLE}:⟨{fid}⟩->has_relation->{TABLE}:⟨{tid}⟩ SET relation='{rel}';")
-    print(f"  {len(data['edges'])} エッジを作成しました。")
+    print("  LLMでノード間の関係を抽出中...")
+    edges = extract_relations(data["nodes"])
+    for edge in edges:
+        conn.query(
+            f"RELATE {TABLE}:⟨{edge.source}⟩->has_relation->{TABLE}:⟨{edge.target}⟩ "
+            f"SET relation='{edge.relation}';"
+        )
+    print(f"  {len(edges)} エッジを作成しました。")
 
     surreal_query("""
         DEFINE ANALYZER text_analyzer TOKENIZERS blank FILTERS lowercase, ascii;

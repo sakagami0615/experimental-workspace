@@ -14,6 +14,13 @@ from common import extract_entities, generate, get_connection, get_embeddings, s
 TABLE = "concept"
 
 
+def _surreal_result(rows: list) -> list:
+    """SurrealDBクライアントの結果形式差を吸収してリストを返す。"""
+    if rows and isinstance(rows[0], dict) and "result" in rows[0]:
+        return rows[0].get("result", [])
+    return rows or []
+
+
 def vector_search(question: str, top_k: int = 3) -> list[dict]:
     """SurrealDBVectorStoreでベクトル類似検索する。"""
     conn = get_connection()
@@ -33,7 +40,7 @@ def graph_search(question: str) -> list[dict]:
         rows = surreal_query(
             f"SELECT node_id, label, content FROM {TABLE} "
             f"WHERE label @@ '{escaped}' OR content @@ '{escaped}' LIMIT 5;")
-        nodes = rows[0].get("result", []) if rows else []
+        nodes = _surreal_result(rows)
         for node in nodes:
             nid = node.get("node_id")
             if not nid or nid in seen:
@@ -41,12 +48,11 @@ def graph_search(question: str) -> list[dict]:
             seen.add(nid)
             results.append(node)
             related_rows = surreal_query(f"SELECT ->has_relation->{TABLE}.* AS related FROM {TABLE}:⟨{nid}⟩;")
-            if related_rows:
-                for row in related_rows[0].get("result", []):
-                    for r in row.get("related", []):
-                        if r and r.get("node_id") not in seen:
-                            seen.add(r["node_id"])
-                            results.append(r)
+            for row in _surreal_result(related_rows):
+                for r in row.get("related", []):
+                    if r and r.get("node_id") not in seen:
+                        seen.add(r["node_id"])
+                        results.append(r)
     return results
 
 

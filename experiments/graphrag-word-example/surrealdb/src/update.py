@@ -13,29 +13,41 @@ from pathlib import Path
 from langchain_core.documents import Document
 from langchain_surrealdb.vectorstores import SurrealDBVectorStore
 
-from common import get_connection, get_embeddings
+from common import extract_relations, get_connection, get_embeddings
 
 DATA_PATH = Path(__file__).parent.parent / "data" / "sample.json"
 TABLE = "concept"
 
 
 def upsert_graph(data: dict) -> None:
-    """ノードをベクトルストアにアップサートし、エッジを追加する。"""
+    """ノードをベクトルストアにアップサートし、LLMで抽出した関係を追加する。"""
     conn = get_connection()
     embeddings = get_embeddings()
     store = SurrealDBVectorStore(embedding=embeddings, connection=conn, table=TABLE)
 
     docs = [
-        Document(page_content=node["content"], metadata={"node_id": node["id"], "label": node["label"]})
+        Document(id=node["id"], page_content=node["content"], metadata={"node_id": node["id"], "label": node["label"]})
         for node in data["nodes"]
     ]
     store.add_documents(docs)
+    for node in data["nodes"]:
+        conn.query(
+            f"UPDATE {TABLE}:⟨{node['id']}⟩ SET "
+            f"node_id = {json.dumps(node['id'], ensure_ascii=False)}, "
+            f"label = {json.dumps(node['label'], ensure_ascii=False)}, "
+            f"content = {json.dumps(node['content'], ensure_ascii=False)};"
+        )
     print(f"  {len(docs)} ノードをアップサートしました。")
 
-    for edge in data["edges"]:
-        fid, tid, rel = edge["from"], edge["to"], edge["relation"]
-        conn.query(f"RELATE {TABLE}:⟨{fid}⟩->has_relation->{TABLE}:⟨{tid}⟩ SET relation='{rel}';")
-    print(f"  {len(data['edges'])} エッジを追加しました。")
+    print("  LLMでノード間の関係を抽出中...")
+    edges = extract_relations(data["nodes"])
+    for edge in edges:
+        conn.query(
+            f"RELATE {TABLE}:⟨{edge.source}⟩->has_relation->{TABLE}:⟨{edge.target}⟩ "
+            f"SET relation='{edge.relation}';"
+        )
+        print(f"  edge: {edge.source} -> {edge.target}")
+    print(f"  {len(edges)} エッジを追加しました。")
 
 
 def main() -> None:
