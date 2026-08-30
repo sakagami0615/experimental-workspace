@@ -1,0 +1,14 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+**/data/raw/
+
+# Sphinx documentation
+**/docs/_build/
+_build/
+.doctrees/
+
+# superpowers plans/specs output
+**/superpowers/
