@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GraphRAG 実験環境 設計書</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Ubuntu+Sans:wght@400;500;700&family=Noto+Sans+JP:wght@400;500;700&family=Ubuntu+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./design-system/document.css">
+<script src="./design-system/math-copy.js"></script>
+<script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
+<script>document.addEventListener("DOMContentLoaded", () => hljs.highlightAll());</script>
+<style>
+.db-lane text,
+.pipeline text {
+  font-family: var(--mb-font-sans);
+  fill: var(--mb-ink);
+}
+
+.db-lane .label,
+.pipeline .label {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.db-lane .small,
+.pipeline .small {
+  font-size: 12px;
+  fill: var(--mb-muted);
+}
+
+.mb-table-wide {
+  font-size: 14px;
+}
+
+.mb-table-wide td,
+.mb-table-wide th {
+  vertical-align: top;
+}
+</style>
+</head>
+<body>
+<div class="mb-page">
+
+<header class="mb-header">
+  <div>
+    <h1>GraphRAG 実験環境 設計書</h1>
+    <p class="mb-meta-line">docs/design.md companion / 2026-08-30</p>
+  </div>
+</header>
+
+<p class="mb-lede">
+SurrealDB、Neo4j、EdgeDB の3種類のデータベースで Hybrid GraphRAG パイプラインを実装し、同じ知識データに対する表現力、検索方法、実装差分を比較するための PoC 設計書です。
+</p>
+
+<div class="mb-wrap">
+<div class="mb-main">
+
+<nav class="mb-toc">
+  <ol>
+    <li><a href="#background">目的とスコープ</a></li>
+    <li><a href="#architecture">全体アーキテクチャ</a></li>
+    <li><a href="#structure">ディレクトリ構成</a></li>
+    <li><a href="#model">データモデル</a></li>
+    <li><a href="#flow">処理フロー</a></li>
+    <li><a href="#components">共通コンポーネント</a></li>
+    <li><a href="#databases">DB別設計</a></li>
+    <li><a href="#env">環境変数と実行</a></li>
+    <li><a href="#comparison">比較観点</a></li>
+    <li><a href="#limits">制約と拡張候補</a></li>
+  </ol>
+</nav>
+
+<div class="mb-summary">
+  <ul>
+    <li>同じ GraphRAG パイプラインを3つのDB実装で比較する。</li>
+    <li>検索はベクトル検索とグラフ検索を並列に走らせ、<code>node_id</code> で重複排除して回答コンテキストにする。</li>
+    <li>EdgeDB のベクトル検索は全件取得 + Python 側コサイン類似度計算であり、小規模 PoC 専用である。</li>
+  </ul>
+</div>
+
+<h2 id="background">目的とスコープ</h2>
+
+<p>
+この実験環境は、SurrealDB / Neo4j / EdgeDB の3種類のデータベースで Hybrid GraphRAG パイプラインを実装し、同じ知識データに対して各DBの表現力、検索方法、実装差分を比較するための PoC です。
+</p>
+
+<p>
+GraphRAG の主目的は、ベクトル検索だけでは拾いにくい概念間の関係をグラフ検索で補い、LLM に渡すコンテキストの網羅性を高めることにあります。
+</p>
+
+<div class="mb-grid-2">
+  <div class="mb-card">
+    <div class="mb-card-title">対象に含めるもの</div>
+    <ul>
+      <li>小規模な概念ノードを対象にしたグラフ構築</li>
+      <li>LLM によるノード間関係の自動抽出</li>
+      <li>ベクトル検索とグラフ検索の並列実行</li>
+      <li>検索結果の重複排除とマージ</li>
+      <li>取得コンテキストを使った LLM 回答生成</li>
+      <li>SurrealDB / Neo4j / EdgeDB の実装比較</li>
+    </ul>
+  </div>
+  <div class="mb-card">
+    <div class="mb-card-title">対象外とするもの</div>
+    <ul>
+      <li>大規模データ投入</li>
+      <li>本番運用向けの認証・TLS・監査ログ</li>
+      <li>性能ベンチマークの自動化</li>
+      <li>UI / API サーバ化</li>
+      <li>継続的なインデックス再構築戦略</li>
+    </ul>
+  </div>
+</div>
+
+<h2 id="architecture">全体アーキテクチャ</h2>
+
+<p>
+各DB環境は独立したフォルダとして構成し、DBサービスと Python 実行環境を <code>docker-compose.yml</code> で定義します。Python コンテナはホストで起動している Ollama に <code>host.docker.internal:11434</code> 経由で接続します。
+</p>
+
+<figure class="mb-figure">
+  <div class="mb-figure-frame">
+    <svg class="pipeline" viewBox="0 0 760 270" width="760" role="img" aria-label="GraphRAG 実験環境の全体アーキテクチャ">
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+          <path d="M0 0 L8 4 L0 8 Z" fill="#111110"></path>
+        </marker>
+      </defs>
+      <g fill="none" stroke="#111110" stroke-width="2">
+        <rect x="40" y="94" width="130" height="62" rx="12"></rect>
+        <rect x="270" y="72" width="170" height="106" rx="12"></rect>
+        <rect x="590" y="40" width="130" height="62" rx="12"></rect>
+        <rect x="590" y="150" width="130" height="62" rx="12"></rect>
+        <line x1="170" y1="125" x2="270" y2="125" marker-end="url(#arrow)"></line>
+        <line x1="440" y1="106" x2="590" y2="72" marker-end="url(#arrow)"></line>
+        <line x1="440" y1="144" x2="590" y2="181" marker-end="url(#arrow)"></line>
+      </g>
+      <text class="label" x="105" y="120" text-anchor="middle">ユーザー</text>
+      <text class="small" x="105" y="140" text-anchor="middle">query.py を実行</text>
+      <text class="label" x="355" y="113" text-anchor="middle">Python コンテナ</text>
+      <text class="small" x="355" y="137" text-anchor="middle">検索・抽出・回答生成を制御</text>
+      <text class="label" x="655" y="66" text-anchor="middle">Ollama</text>
+      <text class="small" x="655" y="86" text-anchor="middle">埋め込み / LLM</text>
+      <text class="label" x="655" y="176" text-anchor="middle">対象DB</text>
+      <text class="small" x="655" y="196" text-anchor="middle">ノード / エッジ / 検索</text>
+    </svg>
+  </div>
+  <figcaption>fig.1 Docker Compose で分離された Python 実行環境が Ollama と各DBへ接続する。</figcaption>
+</figure>
+
+<pre><code class="language-plaintext">ユーザー
+  |
+  | docker compose run --rm python python src/query.py "質問文"
+  v
+Python コンテナ
+  |
+  +-- Ollama: 埋め込み生成 / エンティティ抽出 / 回答生成
+  |
+  +-- 対象DB: ノード、埋め込み、関係エッジを保存・検索</code></pre>
+
+<h2 id="structure">ディレクトリ構成</h2>
+
+<p>
+実装は DB ごとに独立したフォルダへ分けます。各フォルダは Dockerfile、Compose 定義、依存定義、サンプルデータ、実行スクリプトを持ちます。
+</p>
+
+<pre><code class="language-plaintext">.
+├── README.md
+├── docs/
+│   ├── design.md
+│   └── 20260830-graphrag-design.html
+├── surrealdb/
+│   ├── Dockerfile
+│   ├── docker-compose.yml
+│   ├── pyproject.toml
+│   ├── data/sample.json
+│   └── src/
+│       ├── common.py
+│       ├── build.py
+│       ├── update.py
+│       └── query.py
+├── neo4j/
+│   ├── Dockerfile
+│   ├── docker-compose.yml
+│   ├── pyproject.toml
+│   ├── data/sample.json
+│   └── src/
+│       ├── common.py
+│       ├── build.py
+│       ├── update.py
+│       └── query.py
+└── edgedb/
+    ├── Dockerfile
+    ├── docker-compose.yml
+    ├── pyproject.toml
+    ├── dbschema/default.esdl
+    ├── data/sample.json
+    └── src/
+        ├── common.py
+        ├── build.py
+        ├── update.py
+        └── query.py</code></pre>
+
+<h2 id="model">データモデル</h2>
+
+<p>
+入力データは各DBフォルダの <code>data/sample.json</code> に置きます。現在の設計では、JSON 側にはノード情報を定義し、エッジは <code>build.py</code> / <code>update.py</code> 実行時に LLM がノード内容から自動抽出します。
+</p>
+
+<pre><code class="language-json">{
+  "nodes": [
+    {
+      "id": "graphrag",
+      "label": "GraphRAG",
+      "content": "GraphRAGはグラフ構造を活用したRAG手法..."
+    }
+  ],
+  "query": "GraphRAGとは何か？"
+}</code></pre>
+
+<table>
+  <tr><th class="mb-rowlabel">項目</th><th>説明</th></tr>
+  <tr><td class="mb-rowlabel"><code>node_id</code></td><td>ノードの一意識別子。入力JSONの <code>id</code> に対応する。</td></tr>
+  <tr><td class="mb-rowlabel"><code>label</code></td><td>概念名。全文検索と表示に使用する。</td></tr>
+  <tr><td class="mb-rowlabel"><code>content</code></td><td>概念説明。埋め込み生成と回答コンテキストに使用する。</td></tr>
+  <tr><td class="mb-rowlabel"><code>embedding</code></td><td><code>content</code> から生成したベクトル。</td></tr>
+  <tr><td class="mb-rowlabel"><code>relation</code></td><td>LLM が抽出した概念間の関係。<code>USES</code> / <code>EXTENDS</code> / <code>REQUIRES</code> / <code>PART_OF</code> / <code>RELATED_TO</code> を想定する。</td></tr>
+</table>
+
+<h2 id="flow">処理フロー</h2>
+
+<h3>グラフ構築</h3>
+
+<p>
+<code>src/build.py</code> は初回構築用のスクリプトです。サンプルJSONを読み込み、概念ノードを登録したうえで、LLM によりノード間関係を抽出します。
+</p>
+
+<pre><code class="language-plaintext">data/sample.json 読み込み
+  |
+  +-- content を Ollama 埋め込みモデルでベクトル化
+  |
+  +-- DB に Concept ノードを登録
+  |
+  +-- LLM でノード間の関係を抽出
+  |
+  +-- DB に関係エッジまたはリンクを作成
+  |
+  +-- 必要な全文検索インデックスを作成</code></pre>
+
+<h3>データ更新</h3>
+
+<p>
+<code>src/update.py</code> は既存グラフへの追加・更新用のスクリプトです。引数で JSON ファイルを指定でき、省略時は <code>data/sample.json</code> を使用します。
+</p>
+
+<pre><code class="language-plaintext">追加JSON 読み込み
+  |
+  +-- ノードをアップサート
+  |
+  +-- LLM で対象ノード間の関係を抽出
+  |
+  +-- 関係を追加</code></pre>
+
+<h3>質問応答</h3>
+
+<p>
+<code>src/query.py</code> は Hybrid RAG の検索・回答生成を行います。ベクトル検索とグラフ検索を並列実行し、取得結果を統合してから LLM へ渡します。
+</p>
+
+<figure class="mb-figure">
+  <div class="mb-figure-frame">
+    <svg class="pipeline" viewBox="0 0 760 330" width="760" role="img" aria-label="質問応答の処理フロー">
+      <defs>
+        <marker id="arrow2" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+          <path d="M0 0 L8 4 L0 8 Z" fill="#111110"></path>
+        </marker>
+      </defs>
+      <g fill="none" stroke="#111110" stroke-width="2">
+        <rect x="305" y="20" width="150" height="48" rx="10"></rect>
+        <rect x="80" y="120" width="190" height="66" rx="10"></rect>
+        <rect x="490" y="120" width="190" height="66" rx="10"></rect>
+        <rect x="285" y="230" width="190" height="58" rx="10"></rect>
+        <line x1="355" y1="68" x2="190" y2="120" marker-end="url(#arrow2)"></line>
+        <line x1="405" y1="68" x2="585" y2="120" marker-end="url(#arrow2)"></line>
+        <line x1="270" y1="160" x2="285" y2="252" marker-end="url(#arrow2)"></line>
+        <line x1="490" y1="160" x2="475" y2="252" marker-end="url(#arrow2)"></line>
+      </g>
+      <text class="label" x="380" y="50" text-anchor="middle">質問</text>
+      <text class="label" x="175" y="148" text-anchor="middle">ベクトル検索</text>
+      <text class="small" x="175" y="169" text-anchor="middle">意味的に近い Concept</text>
+      <text class="label" x="585" y="148" text-anchor="middle">グラフ検索</text>
+      <text class="small" x="585" y="169" text-anchor="middle">起点抽出 + 隣接ノード</text>
+      <text class="label" x="380" y="258" text-anchor="middle">統合コンテキスト</text>
+      <text class="small" x="380" y="278" text-anchor="middle">重複排除して回答生成へ</text>
+    </svg>
+  </div>
+  <figcaption>fig.2 Hybrid RAG では2種類の検索結果を統合して LLM の回答コンテキストにする。</figcaption>
+</figure>
+
+<pre><code class="language-plaintext">質問
+  |
+  +-- ベクトル検索: 質問に意味的に近い Concept を top-k 取得
+  |
+  +-- グラフ検索: LLMでエンティティ抽出 → 全文検索 → 隣接ノード取得
+  |
+  +-- RunnableParallel で両検索を並列実行
+  |
+  +-- node_id で重複排除してコンテキスト化
+  |
+  +-- Ollama LLM にコンテキストと質問を渡して回答生成</code></pre>
+
+<h2 id="components">共通コンポーネント</h2>
+
+<p>
+各DBの <code>src/common.py</code> は、Ollama クライアント生成、回答生成、関係抽出、エンティティ抽出、DB接続ヘルパーを集約します。
+</p>
+
+<table>
+  <tr><th class="mb-rowlabel">関数</th><th>責務</th></tr>
+  <tr><td class="mb-rowlabel"><code>get_embeddings()</code></td><td><code>langchain_ollama.OllamaEmbeddings</code> を生成する。</td></tr>
+  <tr><td class="mb-rowlabel"><code>get_llm()</code></td><td><code>langchain_ollama.ChatOllama</code> を生成する。</td></tr>
+  <tr><td class="mb-rowlabel"><code>generate()</code></td><td>検索コンテキストを使って回答を生成する。</td></tr>
+  <tr><td class="mb-rowlabel"><code>extract_relations()</code></td><td>LLM の構造化出力またはJSON出力からノード間関係を抽出する。</td></tr>
+  <tr><td class="mb-rowlabel"><code>extract_entities()</code></td><td>質問からグラフ検索用キーワードを抽出する。</td></tr>
+  <tr><td class="mb-rowlabel">DB接続ヘルパー</td><td>各DBのクライアントまたは接続オブジェクトを生成する。</td></tr>
+</table>
+
+<h2 id="databases">DB別設計</h2>
+
+<div class="mb-grid-3">
+  <div class="mb-card">
+    <div class="mb-card-title">Neo4j</div>
+    <p>専用グラフDBとして、ノードとリレーションを直接表現します。</p>
+    <ul>
+      <li>DBサービス: <code>neo4j:5</code></li>
+      <li>接続: <code>bolt://neo4j:7687</code></li>
+      <li>ベクトル検索: <code>langchain_neo4j.Neo4jVector</code></li>
+      <li>グラフ検索: Fulltext Index + Cypher traversal</li>
+      <li>関係: <code>(:Concept)-[:HAS_RELATION {relation}]-&gt;(:Concept)</code></li>
+    </ul>
+  </div>
+  <div class="mb-card">
+    <div class="mb-card-title">SurrealDB</div>
+    <p>マルチモデルDBとして、ドキュメント、ベクトル、グラフ関係を同一DB上で扱います。</p>
+    <ul>
+      <li>DBサービス: <code>surrealdb/surrealdb:v2</code></li>
+      <li>接続: <code>http://surrealdb:8000</code></li>
+      <li>ベクトル検索: <code>SurrealDBVectorStore</code></li>
+      <li>グラフ検索: BM25全文検索 + SurrealQL graph traversal</li>
+      <li>関係: <code>concept:id-&gt;has_relation-&gt;concept:id</code></li>
+    </ul>
+  </div>
+  <div class="mb-card">
+    <div class="mb-card-title">EdgeDB</div>
+    <p>型付きスキーマとリンクにより、概念間の関係を表現します。</p>
+    <ul>
+      <li>DBサービス: <code>edgedb/edgedb:4</code></li>
+      <li>接続: <code>edgedb://edgedb@edgedb:5656/edgedb?tls_security=insecure</code></li>
+      <li>ベクトル検索: Python側でコサイン類似度を計算</li>
+      <li>グラフ検索: <code>ILIKE</code> キーワード検索 + link traversal</li>
+      <li>関係: <code>multi related_concepts: Concept</code></li>
+    </ul>
+  </div>
+</div>
+
+<figure class="mb-figure">
+  <div class="mb-figure-frame">
+    <svg class="db-lane" viewBox="0 0 760 250" width="760" role="img" aria-label="DBごとの表現差分">
+      <g fill="none" stroke="#111110" stroke-width="2">
+        <rect x="30" y="40" width="200" height="150" rx="12"></rect>
+        <rect x="280" y="40" width="200" height="150" rx="12"></rect>
+        <rect x="530" y="40" width="200" height="150" rx="12"></rect>
+        <circle cx="82" cy="128" r="24"></circle>
+        <circle cx="178" cy="128" r="24"></circle>
+        <line x1="106" y1="128" x2="154" y2="128"></line>
+        <rect x="322" y="104" width="46" height="46" rx="6"></rect>
+        <rect x="392" y="104" width="46" height="46" rx="6"></rect>
+        <line x1="368" y1="128" x2="392" y2="128"></line>
+        <rect x="570" y="104" width="52" height="46" rx="8"></rect>
+        <rect x="638" y="104" width="52" height="46" rx="8"></rect>
+        <line x1="622" y1="128" x2="638" y2="128"></line>
+      </g>
+      <text class="label" x="130" y="74" text-anchor="middle">Neo4j</text>
+      <text class="small" x="130" y="218" text-anchor="middle">ネイティブなノード・リレーション</text>
+      <text class="label" x="380" y="74" text-anchor="middle">SurrealDB</text>
+      <text class="small" x="380" y="218" text-anchor="middle">record link / relation table</text>
+      <text class="label" x="630" y="74" text-anchor="middle">EdgeDB</text>
+      <text class="small" x="630" y="218" text-anchor="middle">型付きオブジェクトと link</text>
+    </svg>
+  </div>
+  <figcaption>fig.3 3つのDBは概念間の関係を異なるモデルで表現する。</figcaption>
+</figure>
+
+<h3>実装上の特徴</h3>
+
+<table class="mb-table-wide">
+  <tr><th class="mb-rowlabel">DB</th><th>特徴</th></tr>
+  <tr><td class="mb-rowlabel">Neo4j</td><td><code>Neo4jVector.from_documents()</code> で埋め込み付きノードを作成する。<code>CREATE FULLTEXT INDEX conceptFulltext</code> で <code>label</code> / <code>content</code> を検索対象にする。<code>Neo4jGraph</code> は APOC 依存を避けるため <code>refresh_schema=False</code> で利用する。</td></tr>
+  <tr><td class="mb-rowlabel">SurrealDB</td><td><code>SurrealDBVectorStore</code> で埋め込みを保存・検索する。<code>DEFINE ANALYZER</code> と <code>DEFINE INDEX ... SEARCH ... BM25</code> で全文検索を構成する。クライアントの結果形式差は <code>_surreal_result()</code> で吸収する。</td></tr>
+  <tr><td class="mb-rowlabel">EdgeDB</td><td><code>build.py</code> が dev mode の DDL で <code>Concept</code> 型を作成する。<code>embedding</code> は <code>array&lt;float64&gt;</code> として保存する。並列実行に備え、検索ブランチごとに独立した EdgeDB クライアントを生成してクローズする。</td></tr>
+</table>
+
+<h2 id="env">環境変数と実行</h2>
+
+<p>
+各DBフォルダで <code>.env.example</code> を <code>.env</code> にコピーし、必要に応じて値を変更します。実際の <code>.env</code> はコミット対象外です。
+</p>
+
+<table>
+  <tr><th class="mb-rowlabel">変数</th><th>デフォルト</th><th>説明</th></tr>
+  <tr><td class="mb-rowlabel"><code>OLLAMA_BASE_URL</code></td><td><code>http://host.docker.internal:11434</code></td><td>Ollama のベースURL。</td></tr>
+  <tr><td class="mb-rowlabel"><code>OLLAMA_EMBED_MODEL</code></td><td><code>nomic-embed-text</code></td><td>埋め込みモデル名。</td></tr>
+  <tr><td class="mb-rowlabel"><code>OLLAMA_LLM_MODEL</code></td><td><code>llama3.2</code></td><td>関係抽出、エンティティ抽出、回答生成に使うモデル名。</td></tr>
+  <tr><td class="mb-rowlabel"><code>NEO4J_URI</code></td><td><code>bolt://neo4j:7687</code></td><td>Neo4j 接続URI。</td></tr>
+  <tr><td class="mb-rowlabel"><code>NEO4J_USER</code></td><td><code>neo4j</code></td><td>Neo4j ユーザー名。</td></tr>
+  <tr><td class="mb-rowlabel"><code>NEO4J_PASS</code></td><td><code>testpassword</code></td><td>Neo4j パスワード。</td></tr>
+  <tr><td class="mb-rowlabel"><code>SURREAL_URL</code></td><td><code>http://surrealdb:8000</code></td><td>SurrealDB 接続URL。</td></tr>
+  <tr><td class="mb-rowlabel"><code>SURREAL_USER</code></td><td><code>root</code></td><td>SurrealDB ユーザー名。</td></tr>
+  <tr><td class="mb-rowlabel"><code>SURREAL_PASS</code></td><td><code>root</code></td><td>SurrealDB パスワード。</td></tr>
+  <tr><td class="mb-rowlabel"><code>SURREAL_NS</code></td><td><code>graphrag_ns</code></td><td>SurrealDB namespace。</td></tr>
+  <tr><td class="mb-rowlabel"><code>SURREAL_DB</code></td><td><code>graphrag_db</code></td><td>SurrealDB database。</td></tr>
+  <tr><td class="mb-rowlabel"><code>EDGEDB_DSN</code></td><td><code>edgedb://edgedb@edgedb:5656/edgedb?tls_security=insecure</code></td><td>EdgeDB 接続DSN。</td></tr>
+</table>
+
+<p>
+対象DBのフォルダに移動して、次の順で実行します。<code>&lt;db-service&gt;</code> は <code>neo4j</code> / <code>surrealdb</code> / <code>edgedb</code> のいずれかです。
+</p>
+
+<pre><code class="language-bash">cp .env.example .env
+docker compose up -d &lt;db-service&gt;
+docker compose run --rm python python src/build.py
+docker compose run --rm python python src/update.py [data/your_data.json]
+docker compose run --rm python python src/query.py "質問文"
+docker compose down -v</code></pre>
+
+<h2 id="comparison">比較観点</h2>
+
+<table class="mb-table-wide">
+  <tr><th class="mb-rowlabel">観点</th><th>Neo4j</th><th>SurrealDB</th><th>EdgeDB</th></tr>
+  <tr><td class="mb-rowlabel">グラフ表現</td><td>ネイティブなノード・リレーション</td><td>record link / relation table</td><td>link</td></tr>
+  <tr><td class="mb-rowlabel">クエリ言語</td><td>Cypher</td><td>SurrealQL</td><td>EdgeQL</td></tr>
+  <tr><td class="mb-rowlabel">ベクトル検索</td><td>LangChain統合を利用</td><td>LangChain統合を利用</td><td>Python側で独自計算</td></tr>
+  <tr><td class="mb-rowlabel">全文検索</td><td>Fulltext Index</td><td>BM25 Search Index</td><td><code>ILIKE</code></td></tr>
+  <tr><td class="mb-rowlabel">スキーマ</td><td>柔軟</td><td>柔軟</td><td>明示的な型定義</td></tr>
+  <tr><td class="mb-rowlabel">PoCでの強み</td><td>グラフトラバースの自然さ</td><td>1DBで多モデルを扱える</td><td>型安全なモデル表現</td></tr>
+  <tr><td class="mb-rowlabel">PoCでの制約</td><td>Neo4j固有の運用知識が必要</td><td>バージョン差や結果形式差に注意</td><td>大規模ベクトル検索には不向き</td></tr>
+</table>
+
+<h2 id="limits">制約と拡張候補</h2>
+
+<div class="mb-card">
+  <div class="mb-card-label">設計上の制約と注意</div>
+  <ul>
+    <li>LLM による関係抽出は非決定的であり、モデルやプロンプトによりエッジ数・関係種別が変わる可能性がある。</li>
+    <li><code>update.py</code> は新規ノード投入と関係追加を目的とし、既存関係の削除や再正規化は扱わない。</li>
+    <li>EdgeDB のベクトル検索は全件をアプリケーション側に読み出すため、小規模PoC専用の実装である。</li>
+    <li>SurrealDB のクエリ文字列生成では、入力データの扱いに注意する。PoCではローカルサンプルを前提とする。</li>
+    <li>本番相当の検証を行う場合は、認証情報管理、スキーママイグレーション、LLM出力検証、テストデータ管理を追加設計する必要がある。</li>
+  </ul>
+</div>
+
+<div class="mb-card">
+  <div class="mb-card-label">今後の拡張候補</div>
+  <ul>
+    <li>検索結果のスコア統合とランキング改善</li>
+    <li>LLM 抽出エッジの監査ログ化</li>
+    <li>エッジ種別ごとの重み付け</li>
+    <li>DBごとの性能比較スクリプト</li>
+    <li>評価用質問セットと期待回答による回帰テスト</li>
+    <li>共通コードの抽象化とDB別アダプタ化</li>
+  </ul>
+</div>
+
+</div><!-- /.mb-main -->
+
+<aside class="mb-glossary">
+  <h2>用語リスト</h2>
+  <table>
+    <tr><th>用語</th><th>定義</th></tr>
+    <tr><td>GraphRAG</td><td>検索拡張生成にグラフ構造を組み合わせ、概念間の関係を回答コンテキストに含める手法。</td></tr>
+    <tr><td>Hybrid RAG</td><td>複数の検索方法を組み合わせる RAG。本設計ではベクトル検索とグラフ検索を併用する。</td></tr>
+    <tr><td>Concept</td><td>知識グラフ上の概念ノード。<code>label</code>、<code>content</code>、<code>embedding</code> を持つ。</td></tr>
+    <tr><td>ベクトル検索</td><td>質問と文書を埋め込みベクトルに変換し、意味的な近さで検索する方法。</td></tr>
+    <tr><td>グラフ検索</td><td>起点ノードから関係エッジやリンクをたどり、関連概念を取得する方法。</td></tr>
+    <tr><td>Ollama</td><td>ローカルで埋め込みモデルやLLMを実行するためのランタイム。</td></tr>
+    <tr><td>RunnableParallel</td><td>LangChain の並列実行部品。複数の検索ブランチを同時に実行するために使う。</td></tr>
+  </table>
+</aside>
+
+</div><!-- /.mb-wrap -->
+
+<footer class="mb-footer">GraphRAG Word Example / HTML companion for docs/design.md</footer>
+
+</div>
+</body>
+</html>
