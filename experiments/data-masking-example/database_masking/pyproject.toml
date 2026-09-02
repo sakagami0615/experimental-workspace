@@ -1,0 +1,38 @@
+[project]
+name = "database-masking"
+version = "0.1.0"
+description = "表形式データ（CSV/Excel/SQLite）向けのマスキング・仮名化ツール"
+requires-python = ">=3.14"
+dependencies = [
+    "pandas>=2.0",
+    "openpyxl>=3.1",
+    "PyYAML>=6.0",
+    "presidio-analyzer>=2.2",
+    "presidio-anonymizer>=2.2",
+    "spacy>=3.7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = [
+    "database_masking",
+    "database_masking.detectors",
+    "database_masking.io",
+    "database_masking.masking",
+    "database_masking.verify",
+    "sample_data",
+]
+
+[tool.setuptools.package-dir]
+database_masking = "src"
+sample_data = "sample_data"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

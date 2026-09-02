@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>データマスキングツール 設計説明</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Ubuntu+Sans:wght@400;500;700&family=Noto+Sans+JP:wght@400;500;700&family=Ubuntu+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./design-system/document.css">
+<script src="./design-system/math-copy.js"></script>
+<script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
+<script>document.addEventListener("DOMContentLoaded", () => hljs.highlightAll());</script>
+</head>
+<body>
+<div class="mb-page">
+<header class="mb-header">
+  <div>
+    <h1>データマスキングツール 設計説明</h1>
+    <p class="mb-meta-line">database_masking/docs/specs/design.md から作成</p>
+  </div>
+</header>
+
+<p class="mb-lede">
+CSV、Excel、SQLiteの実データを顧客環境内で加工し、外部分析基盤へ持ち出す前に不要項目削除、PII検出、マスキング、検出漏れチェックを行うツールの設計をまとめます。
+</p>
+
+<div class="mb-wrap">
+<div class="mb-main">
+<nav class="mb-toc">
+  <ol>
+    <li><a href="#background">背景</a></li>
+    <li><a href="#architecture">全体アーキテクチャ</a></li>
+    <li><a href="#policy">ポリシー</a></li>
+    <li><a href="#detection">検出と仮名化</a></li>
+    <li><a href="#verify">verifyの仕組み</a></li>
+    <li><a href="#operation">CLIと運用</a></li>
+  </ol>
+</nav>
+
+<div class="mb-summary">
+  <ul>
+    <li>カラム単位の <code>policy.yaml</code> で、削除・仮名化・維持・自由記述検出を明示する。</li>
+    <li>CSV、Excel、SQLiteをファイルベースで読み書きし、ライブDB接続はスコープ外にする。</li>
+    <li><em>顧客環境内で処理を完結</em>させ、人間レビューを経てから外部分析基盤へ持ち出す。</li>
+  </ul>
+</div>
+
+<h2 id="background">背景</h2>
+<p>
+<code>database_masking</code> は、実データを外部分析基盤に渡す前に、顧客環境内で安全に前処理するためのローカル実行ツールです。ツールが担う範囲は、不要項目削除から検出漏れチェックまでです。
+</p>
+<p>
+外部分析基盤への投入、人間によるレビュー、持ち出し承認はツール外の工程です。ツールは、承認前に「どのカラムに何をするか」を明示し、未定義カラムをそのまま持ち出さない設計を採ります。
+</p>
+
+<h2 id="architecture">全体アーキテクチャ</h2>
+<p>
+<code>mask</code> は入力データと <code>policy.yaml</code> を読み込み、カラムポリシーを適用します。<code>verify</code> はマスク済みデータへ同じ検出器を再適用し、残存PII候補をCSVまたはJSONで出力します。
+</p>
+
+<figure class="mb-figure">
+  <div class="mb-figure-frame">
+    <svg viewBox="0 0 760 300" width="760" role="img" aria-label="database masking pipeline">
+      <defs>
+        <marker id="arrow-db" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+          <path d="M0 0 L10 4 L0 8 Z" fill="#111110"></path>
+        </marker>
+      </defs>
+      <g fill="none" stroke="#111110" stroke-width="2">
+        <rect x="28" y="34" width="150" height="52" rx="10"></rect>
+        <rect x="242" y="34" width="150" height="52" rx="10"></rect>
+        <rect x="456" y="34" width="150" height="52" rx="10"></rect>
+        <rect x="242" y="142" width="150" height="52" rx="10"></rect>
+        <rect x="456" y="142" width="150" height="52" rx="10"></rect>
+        <rect x="242" y="232" width="150" height="42" rx="10"></rect>
+        <path d="M178 60 H242" marker-end="url(#arrow-db)"></path>
+        <path d="M392 60 H456" marker-end="url(#arrow-db)"></path>
+        <path d="M531 86 V142" marker-end="url(#arrow-db)"></path>
+        <path d="M456 168 H392" marker-end="url(#arrow-db)"></path>
+        <path d="M317 194 V232" marker-end="url(#arrow-db)"></path>
+      </g>
+      <g font-family="Ubuntu Sans, Noto Sans JP, sans-serif" font-size="15" fill="#111110" text-anchor="middle">
+        <text x="103" y="65">入力データ</text>
+        <text x="317" y="65">policy.yaml</text>
+        <text x="531" y="65">mask</text>
+        <text x="531" y="173">マスク済みデータ</text>
+        <text x="317" y="173">verify</text>
+        <text x="317" y="258">レビュー</text>
+      </g>
+    </svg>
+  </div>
+  <figcaption>fig.1 ポリシー駆動のデータマスキング工程</figcaption>
+</figure>
+
+<table>
+  <tr><th class="mb-rowlabel">領域</th><th>責務</th><th>主な実装</th></tr>
+  <tr><td class="mb-rowlabel">設定</td><td>ポリシー読込、カラム網羅性、命名規約を検証する</td><td><code>src/config.py</code></td></tr>
+  <tr><td class="mb-rowlabel">入出力</td><td>CSV、Excel、SQLiteを読み書きする</td><td><code>src/io/</code></td></tr>
+  <tr><td class="mb-rowlabel">mask</td><td>カラムポリシーと自由記述検出を適用する</td><td><code>src/masking/</code></td></tr>
+  <tr><td class="mb-rowlabel">verify</td><td>残存PII候補を検出しレポート化する</td><td><code>src/verify/</code></td></tr>
+</table>
+
+<h2 id="policy">ポリシー</h2>
+<p>
+<code>policy.yaml</code> は入力カラムに対する処理を明示します。入力データに存在するのにポリシーへ定義されていないカラムがある場合、<code>mask</code> はエラーで停止します。
+</p>
+<table>
+  <tr><th class="mb-rowlabel">action</th><th>意味</th><th>用途</th></tr>
+  <tr><td class="mb-rowlabel"><code>drop</code></td><td>カラムごと削除</td><td>メール、電話番号など不要な項目</td></tr>
+  <tr><td class="mb-rowlabel"><code>pseudonymize</code></td><td>セル値全体を仮名化</td><td>氏名、顧客ID、住所など</td></tr>
+  <tr><td class="mb-rowlabel"><code>keep</code></td><td>そのまま維持</td><td>年齢、商品カテゴリなど</td></tr>
+  <tr><td class="mb-rowlabel"><code>freetext</code></td><td>セル内の該当箇所だけ仮名化</td><td>問い合わせ本文など</td></tr>
+</table>
+<pre><code class="language-yaml">columns:
+  customer_id: {action: pseudonymize, entity_type: CUSTOMER_ID}
+  name:        {action: pseudonymize, entity_type: PERSON}
+  email:       {action: drop}
+  inquiry:     {action: freetext}
+
+custom_patterns:
+  - entity_type: CUSTOMER_CODE
+    regex: 'CUST-\d{6}'
+
+spacy_model: ja_core_news_sm</code></pre>
+
+<h2 id="detection">検出と仮名化</h2>
+<p>
+<code>freetext</code> カラムには、RegexレコグナイザとPresidio NERを重ねます。複数レイヤーの検出が重なる場合は、スコア降順、同点ならスパン長の降順で非重複の検出結果を選びます。
+</p>
+<p>
+仮名化はHMAC-SHA256ベースで、<code>{entity_type}_{8桁16進数}</code> の形式を返します。元の値と仮名の対応表は保存せず、saltのみを <code>.secrets/salt.key</code> に保持します。
+</p>
+
+<h2 id="verify">verifyの仕組み</h2>
+<p>
+<code>verify</code> は <code>mask</code> と同じポリシーから同じ検出器を再構築し、マスク済みデータに残ったPII候補を出力します。レポートには検出テキストの原文が含まれるため、外部へ渡さない運用が前提です。
+</p>
+<pre><code class="language-csv">row_index,column,entity_type,detected_text,score
+128,inquiry,PERSON,"田中様",0.85</code></pre>
+<p>
+仮名化トークン自体の誤検出は <code>PSEUDONYM_TOKEN_PATTERN</code> で除外します。ただし、同じ検出器を再利用するため、モデル起因の検出漏れは <code>verify</code> にも現れません。
+</p>
+
+<h2 id="operation">CLIと運用</h2>
+<pre><code class="language-bash">python -m database_masking mask \
+  --input sample_data/customer_raw_sample.csv \
+  --policy config/policy.example.yaml \
+  --output output/masked.csv \
+  --salt-file .secrets/salt.key
+
+python -m database_masking verify \
+  --input output/masked.csv \
+  --policy config/policy.example.yaml \
+  --output output/verify_report.csv</code></pre>
+<ul>
+  <li>SQLite入力では <code>--input-table</code>、SQLite出力では <code>--output-table</code> が必要です。</li>
+  <li>PostgreSQLやMySQLなどへのライブDB接続はスコープ外です。</li>
+  <li><code>ja_core_news_sm</code> の既知の検出漏れは、<code>test_known_limitations.py</code> に回帰記録されています。</li>
+</ul>
+</div>
+
+<aside class="mb-glossary">
+  <h2>用語リスト</h2>
+  <table>
+    <tr><th>用語</th><th>定義</th></tr>
+    <tr><td>policy.yaml</td><td>カラムごとの処理方針と検出設定を定義するYAMLファイル。</td></tr>
+    <tr><td>PII</td><td>個人を識別し得る情報。氏名、メール、電話番号など。</td></tr>
+    <tr><td>freetext</td><td>セル全体ではなく、自由記述内の検出箇所だけを置換する処理。</td></tr>
+    <tr><td>仮名化</td><td>元の値を不可逆な別名トークンへ置き換える処理。</td></tr>
+    <tr><td>verify</td><td>マスク済みデータを再スキャンし、残存候補をレポートする確認処理。</td></tr>
+  </table>
+</aside>
+</div>
+
+<footer class="mb-footer">Generated from design.md with the HTML skill.</footer>
+</div>
+</body>
+</html>

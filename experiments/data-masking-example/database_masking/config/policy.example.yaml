@@ -1,0 +1,17 @@
+columns:
+  customer_id: {action: pseudonymize, entity_type: CUSTOMER_ID}
+  name: {action: pseudonymize, entity_type: PERSON}
+  email: {action: drop}
+  phone: {action: drop}
+  address: {action: pseudonymize, entity_type: ADDRESS}
+  age: {action: keep}
+  product: {action: keep}
+  category: {action: keep}
+  inquiry: {action: freetext}
+  purchase_date: {action: keep}
+
+custom_patterns:
+  - entity_type: CUSTOMER_CODE
+    regex: 'CUST-\d{6}'
+
+spacy_model: ja_core_news_sm

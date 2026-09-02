@@ -1,0 +1,15 @@
+.vscode/settings.json
+.secrets/
+__pycache__/
+*.pyc
+.venv/
+venv/
+**/output/*
+!**/output/.gitkeep
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+*.db
+*.sqlite
+*.sqlite3
