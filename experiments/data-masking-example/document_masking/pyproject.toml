@@ -1,0 +1,33 @@
+[project]
+name = "document-masking"
+version = "0.1.0"
+description = "自由記述文書（.txt/.md）向けのマスキング・仮名化ツール"
+requires-python = ">=3.14"
+dependencies = [
+    "presidio-analyzer>=2.2",
+    "spacy>=3.7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = [
+    "document_masking",
+    "document_masking.detectors",
+    "document_masking.masking",
+    "document_masking.verify",
+    "sample_data",
+]
+
+[tool.setuptools.package-dir]
+document_masking = "src"
+sample_data = "sample_data"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
