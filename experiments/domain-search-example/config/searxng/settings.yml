@@ -1,0 +1,21 @@
+use_default_settings: true
+
+server:
+  secret_key: "domain-search-example-local-secret-change-me"
+
+search:
+  formats:
+    - html
+    - json
+
+# CAPTCHA・レート制限が頻発し安定して結果を返せない、または site: 演算子による
+# ドメイン限定検索と相性が悪いエンジンを無効化する。
+engines:
+  - name: duckduckgo
+    disabled: true
+  - name: startpage
+    disabled: true
+  - name: wikidata
+    disabled: true
+  - name: wikipedia
+    disabled: true
