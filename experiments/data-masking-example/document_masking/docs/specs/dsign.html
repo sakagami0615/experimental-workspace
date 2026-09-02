@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ドキュメントマスキングツール 設計説明</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Ubuntu+Sans:wght@400;500;700&family=Noto+Sans+JP:wght@400;500;700&family=Ubuntu+Mono:wght@400;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./design-system/document.css">
+<script src="./design-system/math-copy.js"></script>
+<script async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
+<script>document.addEventListener("DOMContentLoaded", () => hljs.highlightAll());</script>
+</head>
+<body>
+<div class="mb-page">
+<header class="mb-header">
+  <div>
+    <h1>ドキュメントマスキングツール 設計説明</h1>
+    <p class="mb-meta-line">document_masking/docs/specs/design.md から作成</p>
+  </div>
+</header>
+
+<p class="mb-lede">
+自由記述の <code>.txt</code> / <code>.md</code> ファイルから、氏名・電話番号などのPII候補をローカルで検出し、不可逆な仮名化トークンへ置換するツールの設計を視覚的に整理した文書です。
+</p>
+
+<div class="mb-wrap">
+<div class="mb-main">
+<nav class="mb-toc">
+  <ol>
+    <li><a href="#background">背景</a></li>
+    <li><a href="#architecture">全体アーキテクチャ</a></li>
+    <li><a href="#detection">検出レイヤー</a></li>
+    <li><a href="#pseudonymize">仮名化と検証</a></li>
+    <li><a href="#operation">CLIと運用</a></li>
+    <li><a href="#limits">制限とスコープ外</a></li>
+  </ol>
+</nav>
+
+<div class="mb-summary">
+  <ul>
+    <li>入力は自由記述のテキストファイルであり、カラム単位の <code>policy.yaml</code> は持たない。</li>
+    <li><code>mask</code> と <code>verify</code> はRegexとPresidio NERから同一の検出器を組み立て、検出ロジックの不一致を避ける。</li>
+    <li><em>verifyが空でもPII完全除去の保証ではない</em>ため、人間によるレビューを前提にする。</li>
+  </ul>
+</div>
+
+<h2 id="background">背景</h2>
+<p>
+<code>document_masking</code> は、問い合わせメモや議事録のような自由記述ファイルを、顧客の閉域環境内でマスキングするための独立ツールです。外部APIや外部通信に依存せず、データ持ち出し前の前処理として実行されます。
+</p>
+<p>
+表形式データ向けの <code>database_masking</code> とは分離されています。自由記述文書には「氏名カラム」「電話番号カラム」のような構造がないため、ファイル全体を1つのテキストとして扱い、検出器を一様に適用します。
+</p>
+
+<div class="mb-grid-2">
+  <div class="mb-card">
+    <div class="mb-card-title">表形式データ</div>
+    <p>カラムごとの意味があり、<code>drop</code> や <code>pseudonymize</code> といったポリシーを列単位で適用できます。</p>
+  </div>
+  <div class="mb-card">
+    <div class="mb-card-title">自由記述文書</div>
+    <p>PII候補の位置や個数は文書ごとに異なるため、文書全体を検出対象にします。</p>
+  </div>
+</div>
+
+<h2 id="architecture">全体アーキテクチャ</h2>
+<p>
+CLIは <code>mask</code> と <code>verify</code> に分かれます。どちらも <code>document_masking.detectors.analyzer.build_analyzer()</code> で同じ検出器を作り、RegexとPresidio NERを同じ条件で利用します。
+</p>
+
+<figure class="mb-figure">
+  <div class="mb-figure-frame">
+    <svg viewBox="0 0 720 270" width="720" role="img" aria-label="document masking pipeline">
+      <defs>
+        <marker id="arrow-doc" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+          <path d="M0 0 L10 4 L0 8 Z" fill="#111110"></path>
+        </marker>
+      </defs>
+      <g fill="none" stroke="#111110" stroke-width="2">
+        <rect x="35" y="32" width="160" height="52" rx="10"></rect>
+        <rect x="280" y="32" width="160" height="52" rx="10"></rect>
+        <rect x="525" y="32" width="160" height="52" rx="10"></rect>
+        <rect x="150" y="154" width="180" height="52" rx="10"></rect>
+        <rect x="435" y="154" width="180" height="52" rx="10"></rect>
+        <path d="M195 58 H280" marker-end="url(#arrow-doc)"></path>
+        <path d="M440 58 H525" marker-end="url(#arrow-doc)"></path>
+        <path d="M605 84 C605 126 240 112 240 154" marker-end="url(#arrow-doc)"></path>
+        <path d="M330 180 H435" marker-end="url(#arrow-doc)"></path>
+      </g>
+      <g font-family="Ubuntu Sans, Noto Sans JP, sans-serif" font-size="15" fill="#111110" text-anchor="middle">
+        <text x="115" y="63">入力文書</text>
+        <text x="360" y="63">mask</text>
+        <text x="605" y="63">マスク済み文書</text>
+        <text x="240" y="185">verify</text>
+        <text x="525" y="185">レポート確認</text>
+      </g>
+    </svg>
+  </div>
+  <figcaption>fig.1 mask と verify の流れ</figcaption>
+</figure>
+
+<table>
+  <tr><th class="mb-rowlabel">段階</th><th>役割</th><th>主な実装</th></tr>
+  <tr><td class="mb-rowlabel">読み込み</td><td>ファイル全体をUTF-8テキストとして読む</td><td><code>masking/masker.py</code></td></tr>
+  <tr><td class="mb-rowlabel">検出</td><td>Regex、NERでPII候補を抽出する</td><td><code>detectors/analyzer.py</code></td></tr>
+  <tr><td class="mb-rowlabel">置換</td><td>重複検出を解消し、末尾側から仮名化する</td><td><code>masking/pseudonymizer.py</code></td></tr>
+  <tr><td class="mb-rowlabel">検証</td><td>マスク済み文書を再スキャンして候補を報告する</td><td><code>verify/scanner.py</code></td></tr>
+</table>
+
+<h2 id="detection">検出レイヤー</h2>
+<p>
+検出は多層構成です。Regexレコグナイザは日本の電話番号や郵便番号、任意のカスタムパターンを拾います。Presidio NERはspaCy日本語モデルで人名、地名、組織、日時などを検出します。
+</p>
+<div class="mb-grid-3">
+  <div class="mb-card"><div class="mb-card-label">Regex</div><p><code>PHONE_NUMBER</code>、<code>JP_POSTAL_CODE</code>、顧客固有の正規表現を検出します。</p></div>
+  <div class="mb-card"><div class="mb-card-label">NER</div><p><code>ja_core_news_sm</code> を既定に、Presidio経由で自然言語中の固有表現を扱います。</p></div>
+  <div class="mb-card"><div class="mb-card-label">重複解消</div><p>複数レイヤーの検出が重なる場合は、スコアとスパン長を基準に非重複の候補を選びます。</p></div>
+</div>
+
+<h2 id="pseudonymize">仮名化と検証</h2>
+<p>
+仮名化はHMAC-SHA256ベースの決定的アルゴリズムです。同じsalt、同じ正規化入力、同じ <code>entity_type</code> なら常に同じトークンになり、元の値との対応表は保存しません。
+</p>
+<pre><code class="language-python">def pseudonymize(value: str, entity_type: str, salt: bytes) -> str:
+    normalized = normalize(value)
+    digest = hmac.new(salt, normalized.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{entity_type}_{digest[:8]}"</code></pre>
+<p>
+<code>verify</code> では、<code>PERSON_a3f9c2e1</code> のような仮名化トークン自身を誤ってPII候補として報告しないよう、<code>PSEUDONYM_TOKEN_PATTERN</code> と重なる検出結果を除外します。
+</p>
+
+<h2 id="operation">CLIと運用</h2>
+<pre><code class="language-bash">python -m document_masking mask \
+  --input sample_data/sample_inquiry.txt \
+  --output output/masked.txt \
+  --salt-file .secrets/salt.key \
+  --spacy-model ja_core_news_sm
+
+python -m document_masking verify \
+  --input output/masked.txt \
+  --output output/verify_report.json</code></pre>
+<p>
+<code>verify</code> の終了コードは、候補がなければ <code>0</code>、1件でもあれば <code>1</code> です。CIなどの自動チェックに組み込めますが、最終判断はレポートとマスク済みファイルの人間レビューで行います。
+</p>
+
+<h2 id="limits">制限とスコープ外</h2>
+<p>
+既定の <code>ja_core_news_sm</code> では、日本語人名の一部が検出されずに残る可能性があります。<code>verify</code> も同じ検出器を使うため、同じ盲点を共有します。本番運用では <code>ja_core_news_lg</code> の利用と、目視確認を推奨します。
+</p>
+<ul>
+  <li>WordやPowerPointなどのOfficeファイル形式は対象外です。</li>
+  <li>自由記述文書向けのため、カラム単位の <code>policy.yaml</code> は持ちません。</li>
+  <li><code>database_masking</code> との共通ライブラリ化はせず、各ツール内で独立して保守します。</li>
+</ul>
+</div>
+
+<aside class="mb-glossary">
+  <h2>用語リスト</h2>
+  <table>
+    <tr><th>用語</th><th>定義</th></tr>
+    <tr><td>PII</td><td>個人を識別し得る情報。氏名、電話番号、住所など。</td></tr>
+    <tr><td>仮名化</td><td>元の値を直接復元できない別名トークンへ置き換える処理。</td></tr>
+    <tr><td>salt</td><td>ハッシュ計算に加える秘密値。同一入力の推測を難しくする。</td></tr>
+    <tr><td>NER</td><td>自然言語から人名、地名、組織名などの固有表現を抽出する技術。</td></tr>
+    <tr><td>verify</td><td>マスキング済みファイルを再検出し、残存候補をレポートする確認処理。</td></tr>
+  </table>
+</aside>
+</div>
+
+<footer class="mb-footer">Generated from design.md with the HTML skill.</footer>
+</div>
+</body>
+</html>

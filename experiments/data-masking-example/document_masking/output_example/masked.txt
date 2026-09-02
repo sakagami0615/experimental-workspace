@@ -1,0 +1,4 @@
+【問い合わせ内容】
+PERSON_70165b0a様より、商品Aについてお問い合わせがありました。
+折り返し先: PHONE_NUMBER_cbee0c3d
+住所: LOCATION_da04f560担当のPERSON_403d825dが対応予定です。
